@@ -39,43 +39,6 @@ def save_row(relative, label):
         csv.writer(f).writerow(row)
 
 
-def draw_hud(frame, hand_found):
-    h, w, _ = frame.shape
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    WHITE = (255, 255, 255)
-    panel_w = 360
-
-    # semi-transparent dark panel so white text is always readable
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (panel_w, h), (25, 25, 25), -1)
-    cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
-
-    # title
-    cv2.putText(frame, "GESTURE TRAINING MODE", (18, 40), font, 0.75, WHITE, 2)
-    cv2.line(frame, (18, 55), (panel_w - 18, 55), WHITE, 1)
-
-    # instructions
-    cv2.putText(frame, "1. Show a gesture to the camera", (18, 82), font, 0.5, WHITE, 1)
-    cv2.putText(frame, "2. Press its key to save a sample", (18, 104), font, 0.5, WHITE, 1)
-    cv2.putText(frame, "3. Move your hand a bit, repeat 30+ times", (18, 126), font, 0.5, WHITE, 1)
-
-    # gesture list
-    cv2.putText(frame, "KEY   GESTURE            SAMPLES", (18, 165), font, 0.5, WHITE, 1)
-    y = 195
-    for k, label in KEY_MAP.items():
-        cv2.putText(frame, f"[{chr(k)}]", (18, y), font, 0.6, WHITE, 2)
-        cv2.putText(frame, label, (75, y), font, 0.6, WHITE, 1)
-        cv2.putText(frame, str(counts[label]), (290, y), font, 0.6, WHITE, 2)
-        y += 30
-
-    # hand status (dot is coloured, text stays white)
-    dot = (0, 220, 0) if hand_found else (0, 0, 255)
-    cv2.circle(frame, (28, h - 60), 8, dot, -1)
-    cv2.putText(frame, "Hand detected" if hand_found else "No hand found",
-                (48, h - 54), font, 0.55, WHITE, 1)
-    cv2.putText(frame, "Press ESC to quit", (18, h - 22), font, 0.5, WHITE, 1)
-
-
 def processFrame(frame):
     RGB_Frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     MP_Image = mp.Image(image_format=mp.ImageFormat.SRGB, data=RGB_Frame)
@@ -113,7 +76,11 @@ def processFrame(frame):
                 counts[gesture] += 1
                 print(f"Saved '{gesture}' — total: {counts[gesture]}")
 
-    draw_hud(frame, bool(results.hand_landmarks))
+    y_pos = 30
+    for k, label in KEY_MAP.items():
+        cv2.putText(frame, f"[{chr(k)}] {label}: {counts[label]}", (10, y_pos),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 120), 2)
+        y_pos += 28
 
     cv2.imshow("preview", frame)
 
