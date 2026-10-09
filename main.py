@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from PIL import ImageTk
+from PIL import Image
 from appLauncher import get_installed_apps, get_app_icon, launch_app
 from handGesture import detect
 from cameraTest import cameraStart
@@ -9,16 +9,25 @@ import time
 from windowManager import show_all_windows, select_choose_window, open_selected_window, hide_all_windows, close_focused_window
 
 # --- Layout constants ---
-COLS = 5
+COLS = 6
 ROWS = 4
-ICON_SIZE = 64
-SPACING_X = 130
-SPACING_Y = 100
-START_X = 10
-START_Y = 10
+ICON_SIZE = 112
+SPACING_X = 190
+SPACING_Y = 165
+START_X = 40
+START_Y = 20
+
+# --- Text style ---
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+NAME_SCALE = 0.65
+NAME_THICK = 2
+NAME_COLOR = (255, 255, 255)      # white
+NAME_HOVER_COLOR = (0, 255, 255)  # yellow (BGR)
+OUTLINE_COLOR = (0, 0, 0)         # black outline so text is readable on any background
 
 # --- State ---
 app_icons = []
+grid_visible = False   # opened by open palm, closed ONLY by fist
 hovered_idx = -1
 pinch_armed = True
 current_page = 0
@@ -47,6 +56,7 @@ def load_apps():
         icon, name = get_app_icon(app)
         if icon is None:
             continue
+        icon = icon.convert('RGBA').resize((ICON_SIZE, ICON_SIZE), Image.Resampling.LANCZOS)
         app_icons.append((app, icon, name))
 
 
@@ -81,6 +91,25 @@ def get_hovered(cursor_x, cursor_y):
     return -1
 
 
+def draw_text(frame, text, org, scale, color, thickness):
+    cv2.putText(frame, text, org, FONT, scale, OUTLINE_COLOR, thickness + 3, cv2.LINE_AA)
+    cv2.putText(frame, text, org, FONT, scale, color, thickness, cv2.LINE_AA)
+
+
+def fit_text(text, max_w):
+    """Shorten text with '...' so it fits in max_w pixels."""
+    (w, _), _ = cv2.getTextSize(text, FONT, NAME_SCALE, NAME_THICK)
+    if w <= max_w:
+        return text
+    while len(text) > 1:
+        text = text[:-1]
+        short = text.rstrip() + "..."
+        (w, _), _ = cv2.getTextSize(short, FONT, NAME_SCALE, NAME_THICK)
+        if w <= max_w:
+            return short
+    return text
+
+
 def draw_icons(frame):
     for idx, (app, icon, name) in enumerate(get_page_apps()):
         if icon is None:
@@ -98,28 +127,30 @@ def draw_icons(frame):
         blended = (icon_cv * alpha + region * (1 - alpha)).astype(np.uint8)
         frame[y:y + ICON_SIZE, x:x + ICON_SIZE] = blended
 
-        cv2.putText(frame, name, (x, y + ICON_SIZE + 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, (237, 214, 125), 1, cv2.LINE_AA)
+        label = fit_text(name, SPACING_X - 10)
+        (tw, _), _ = cv2.getTextSize(label, FONT, NAME_SCALE, NAME_THICK)
+        tx = max(2, x + ICON_SIZE // 2 - tw // 2)
+        color = NAME_HOVER_COLOR if idx == hovered_idx else NAME_COLOR
+        draw_text(frame, label, (tx, y + ICON_SIZE + 30), NAME_SCALE, color, NAME_THICK)
 
 
 def draw_hover(frame, idx):
     if idx == -1:
         return
     x, y = icon_rect(idx)
-    cv2.rectangle(frame, (x - 3, y - 3), (x + ICON_SIZE + 3, y + ICON_SIZE + 3),
-                  (0, 255, 255), 2)
+    cv2.rectangle(frame, (x - 6, y - 6), (x + ICON_SIZE + 6, y + ICON_SIZE + 6),
+                  (0, 255, 255), 3)
 
 
 def draw_cursor(frame, cx, cy):
-    cv2.circle(frame, (cx, cy), 10, (0, 255, 255), 2)
-    cv2.circle(frame, (cx, cy), 2, (0, 255, 255), -1)
+    cv2.circle(frame, (cx, cy), 14, (0, 255, 255), 3)
+    cv2.circle(frame, (cx, cy), 3, (0, 255, 255), -1)
 
 
 def draw_page_indicator(frame):
     max_page = get_max_page()
     text = f"Page {current_page + 1} / {max_page + 1}"
-    cv2.putText(frame, text, (10, frame.shape[0] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    draw_text(frame, text, (10, frame.shape[0] - 50), 0.8, (255, 255, 255), 2)
 
 
 def draw_task_view_indicator(frame):
@@ -130,7 +161,7 @@ def draw_task_view_indicator(frame):
 
 def get_tilt_angle_from_results(results):
     """Extract tilt angle from already-detected hand world landmarks.
-    Reuses the results returned by detect() — no second detector needed.
+    Reuses the results returned by detect() - no second detector needed.
     """
     if results is None:
         return None
@@ -147,15 +178,15 @@ def get_tilt_angle_from_results(results):
 def processFrame(frame):
     global hovered_idx, pinch_armed, current_page, gesture_armed, tilt_angle_buffer
     global task_view_open, switch_armed, last_switch_time, close_sign, last_close_time
+    global grid_visible
 
     frame_h, frame_w = frame.shape[:2]
     gesture, points, results, frame = detect(frame)
+    cursor_pos = None
 
-    # --- Open palm: show app grid + handle page turning ---
+    # --- Open palm: OPEN the app grid + handle page turning ---
     if gesture == 'open_palm':
-        draw_icons(frame)
-        draw_hover(frame, hovered_idx)
-        draw_page_indicator(frame)
+        grid_visible = True
 
         # Tilt-based page turning using results already returned by detect()
         angle = get_tilt_angle_from_results(results)
@@ -177,15 +208,13 @@ def processFrame(frame):
                 if abs(smoothed) < TILT_REARM:
                     gesture_armed = True
 
-    # --- Point: move cursor and highlight hovered icon ---
+    # --- Point: SELECT (only works while the grid is open) ---
     elif gesture == 'point' and points:
-        draw_icons(frame)
-        cursor_x = int(points[8][0])
-        cursor_y = int(points[8][1])
-        hovered_idx = get_hovered(cursor_x, cursor_y)
-        draw_hover(frame, hovered_idx)
-        draw_cursor(frame, cursor_x, cursor_y)
-        draw_page_indicator(frame)
+        if grid_visible:
+            cursor_x = int(points[8][0])
+            cursor_y = int(points[8][1])
+            hovered_idx = get_hovered(cursor_x, cursor_y)
+            cursor_pos = (cursor_x, cursor_y)
 
     # --- Pinch: launch hovered app OR confirm Task View selection ---
     elif gesture == 'pinch':
@@ -195,10 +224,7 @@ def processFrame(frame):
                 open_selected_window()
                 task_view_open = False
                 pinch_armed = False
-        else:
-            draw_icons(frame)
-            draw_hover(frame, hovered_idx)
-            draw_page_indicator(frame)
+        elif grid_visible:
             if pinch_armed and hovered_idx != -1:
                 aps = get_apps_per_page()
                 app_path, _, app_name = app_icons[current_page * aps + hovered_idx]
@@ -206,8 +232,9 @@ def processFrame(frame):
                 launch_app(app_path)
                 pinch_armed = False
 
-    # --- Fist: clear hover OR close Task View ---
+    # --- Fist: CLOSE the app grid (only way to close it) OR close Task View ---
     elif gesture == 'fist':
+        grid_visible = False
         hovered_idx = -1
         if task_view_open:
             hide_all_windows()
@@ -215,6 +242,8 @@ def processFrame(frame):
 
     # --- Three fingers: open Task View + tilt to navigate left/right ---
     elif gesture == 'three_Fingers':
+        grid_visible = False
+        hovered_idx = -1
         if not task_view_open:
             show_all_windows()
             task_view_open = True
@@ -260,6 +289,14 @@ def processFrame(frame):
     # Re-arm tilt-switch when not showing three fingers
     if gesture != 'three_Fingers':
         switch_armed = True
+
+    # --- Draw the grid whenever it is open (stays even if hand leaves the camera) ---
+    if grid_visible:
+        draw_icons(frame)
+        draw_hover(frame, hovered_idx)
+        draw_page_indicator(frame)
+        if cursor_pos is not None:
+            draw_cursor(frame, cursor_pos[0], cursor_pos[1])
 
     cv2.imshow("preview", frame)
 
